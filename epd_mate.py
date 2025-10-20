@@ -105,7 +105,7 @@ SETTINGS_FILE = 'epd_mate_settings.json'
 
 class AnalyzerThread(threading.Thread):
     """Background worker to analyze positions sequentially."""
-    def __init__(self, input_path, output_path, engine_path, depth, threads, mate_limit, progress_callback, eta_callback, log_callback, stop_event):
+    def __init__(self, input_path, output_path, engine_path, depth, threads, mate_limit, add_solution, progress_callback, eta_callback, log_callback, stop_event):
         super().__init__()
         self.input_path = input_path
         self.output_path = output_path
@@ -113,6 +113,8 @@ class AnalyzerThread(threading.Thread):
         self.depth = depth
         self.threads = threads
         self.mate_limit = mate_limit
+        # whether to add mate solution to output (UI checkbox)
+        self.add_solution = bool(add_solution)
         self.progress_callback = progress_callback
         self.eta_callback = eta_callback
         self.log_callback = log_callback
@@ -248,7 +250,30 @@ class AnalyzerThread(threading.Thread):
                             mate_moves = abs(mate)
                             # Keep if mate_moves within limit and positive
                             if 1 <= mate_moves <= self.mate_limit:
-                                fout.write(line.rstrip('\n') + '\n')
+                                output_line = line.rstrip('\n')
+                                if self.add_solution:
+                                    # Append the full mate solution from the engine PV, up to mate_moves
+                                    try:
+                                        pv = info.get('pv') or []
+                                    except Exception:
+                                        pv = []
+                                    try:
+                                        pv_slice = pv[:mate_moves]
+                                    except Exception:
+                                        pv_slice = pv
+                                    move_ucis = []
+                                    for mv in pv_slice:
+                                        try:
+                                            move_ucis.append(mv.uci())
+                                        except Exception:
+                                            move_ucis.append(str(mv))
+                                    if move_ucis:
+                                        moves_str = ' '.join(move_ucis)
+                                        # use 'sol' token to indicate solution moves
+                                        output_line += f" ; sol {moves_str};"
+                                        self.log_callback(f"Added solution moves ({len(move_ucis)}) for line {processed}: {moves_str}")
+
+                                fout.write(output_line + '\n')
                                 kept += 1
                                 self._kept = kept
                                 self.log_callback(f"Kept line {processed}: mate in {mate_moves}")
@@ -340,28 +365,42 @@ class MainWindow(QMainWindow):
         layout.addLayout(engine_layout)
         layout.addLayout(output_layout)
 
-        # Options
-        opts_layout = QHBoxLayout()
+        # === Engine Settings ===
+        layout.addWidget(QLabel("<b>Engine Settings</b>"))
+
+        engine_opts = QHBoxLayout()
         self.depth_spin = QSpinBox()
         self.depth_spin.setRange(1, 128)
         self.depth_spin.setValue(DEFAULT_DEPTH)
         self.threads_spin = QSpinBox()
         self.threads_spin.setRange(1, 16)
         self.threads_spin.setValue(DEFAULT_THREADS)
+
+        engine_opts.addWidget(QLabel('Depth:'))
+        engine_opts.addWidget(self.depth_spin)
+        engine_opts.addWidget(QLabel('Threads:'))
+        engine_opts.addWidget(self.threads_spin)
+        layout.addLayout(engine_opts)
+
+        # === Mate Finder ===
+        layout.addWidget(QLabel("<b>Mate Finder</b>"))
+
+        mate_layout = QHBoxLayout()
         self.mate_slider = QSlider(Qt.Horizontal)
         self.mate_slider.setRange(0, 12)
         self.mate_slider.setValue(6)
         self.mate_label = QLabel('Mate <= 6')
         self.mate_slider.valueChanged.connect(lambda v: self.mate_label.setText(f"Mate <= {v}"))
 
-        opts_layout.addWidget(QLabel('Depth:'))
-        opts_layout.addWidget(self.depth_spin)
-        opts_layout.addWidget(QLabel('Threads:'))
-        opts_layout.addWidget(self.threads_spin)
-        opts_layout.addWidget(self.mate_label)
-        opts_layout.addWidget(self.mate_slider)
+        # Mate checkbox
+        self.add_solution_checkbox = QCheckBox('Add mate solution')
+        self.add_solution_checkbox.setChecked(False)
 
-        layout.addLayout(opts_layout)
+        mate_layout.addWidget(self.mate_label)
+        mate_layout.addWidget(self.mate_slider)
+        mate_layout.addWidget(self.add_solution_checkbox)
+        layout.addLayout(mate_layout)
+
 
         # Controls
         ctrl_layout = QHBoxLayout()
@@ -525,6 +564,7 @@ class MainWindow(QMainWindow):
             depth=depth,
             threads=threads,
             mate_limit=mate_limit,
+            add_solution=self.add_solution_checkbox.isChecked(),
             progress_callback=self.on_progress,
             eta_callback=self.on_eta,
             log_callback=self.append_log,
