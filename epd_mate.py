@@ -33,12 +33,47 @@ from datetime import timedelta
 import json
 import re
 
-from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QProgressBar, QFileDialog, QSpinBox, QSlider,
-    QLineEdit, QTextEdit, QMessageBox, QCheckBox, QComboBox
-)
-from PySide6.QtCore import Qt, QTimer, Slot
+# Qt bindings compatibility: prefer PySide6, fallback to PyQt6, PySide2 or PyQt5
+try:
+    from PySide6.QtWidgets import (
+        QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+        QPushButton, QLabel, QProgressBar, QFileDialog, QSpinBox, QSlider,
+        QLineEdit, QTextEdit, QMessageBox, QCheckBox, QComboBox
+    )
+    from PySide6.QtCore import Qt, QTimer, Slot, QEvent
+    QT_BINDING = 'PySide6'
+except Exception:
+    try:
+        from PyQt6.QtWidgets import (
+            QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+            QPushButton, QLabel, QProgressBar, QFileDialog, QSpinBox, QSlider,
+            QLineEdit, QTextEdit, QMessageBox, QCheckBox, QComboBox
+        )
+        from PyQt6.QtCore import Qt, QTimer, QEvent
+        # PyQt6 uses different slot decorator name
+        from PyQt6.QtCore import pyqtSlot as Slot
+        QT_BINDING = 'PyQt6'
+    except Exception:
+        try:
+            from PySide2.QtWidgets import (
+                QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+                QPushButton, QLabel, QProgressBar, QFileDialog, QSpinBox, QSlider,
+                QLineEdit, QTextEdit, QMessageBox, QCheckBox, QComboBox
+            )
+            from PySide2.QtCore import Qt, QTimer, Slot, QEvent
+            QT_BINDING = 'PySide2'
+        except Exception:
+            try:
+                from PyQt5.QtWidgets import (
+                    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+                    QPushButton, QLabel, QProgressBar, QFileDialog, QSpinBox, QSlider,
+                    QLineEdit, QTextEdit, QMessageBox, QCheckBox, QComboBox
+                )
+                from PyQt5.QtCore import Qt, QTimer, QEvent
+                from PyQt5.QtCore import pyqtSlot as Slot
+                QT_BINDING = 'PyQt5'
+            except Exception:
+                raise ImportError("No suitable Qt binding found: install PySide6, PyQt6, PySide2 or PyQt5")
 
 import chess
 import chess.engine
@@ -517,11 +552,11 @@ class MainWindow(QMainWindow):
         if self.analyzer and not self.analyzer.is_alive():
             self.poll_timer.stop()
             self.analyzer = None
-            self.analyze_btn.setEnabled(True)
-            self.cancel_btn.setEnabled(False)
-            self.append_log('Background worker finished.')
-
-    def on_progress(self, pct, processed, total, kept):
+# QEvent is imported from the selected Qt binding above
+class _CallableEvent(QEvent):
+    def __init__(self, callable_):
+        super().__init__(QEvent.Type(QEvent.registerEventType()))
+        self.callable = callable_
         # called from background thread
         def upd():
             self.load_progress.setValue(pct)

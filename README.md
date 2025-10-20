@@ -24,6 +24,7 @@ Features
 - Progress bar, ETA, and log output while analyzing
 - Save filtered positions to a new EPD file
 - Cancel analysis at any time
+- Feature to add solve mate solution to FEN
 
 Requirements
 - Python 3.8+
