@@ -78,6 +78,12 @@ except Exception:
 import chess
 import chess.engine
 
+# Small event wrapper to post callables from background threads to the Qt main thread
+class _CallableEvent(QEvent):
+    def __init__(self, callable_):
+        super().__init__(QEvent.Type(QEvent.registerEventType()))
+        self.callable = callable_
+
 # --- Debug logging setup ---
 DEBUG_LOG = "debug.log"
 
@@ -257,8 +263,9 @@ class AnalyzerThread(threading.Thread):
                                         pv = info.get('pv') or []
                                     except Exception:
                                         pv = []
+                                    # Use the full PV returned by the engine to ensure the mating move is included
                                     try:
-                                        pv_slice = pv[:mate_moves]
+                                        pv_slice = pv
                                     except Exception:
                                         pv_slice = pv
                                     move_ucis = []
@@ -268,10 +275,47 @@ class AnalyzerThread(threading.Thread):
                                         except Exception:
                                             move_ucis.append(str(mv))
                                     if move_ucis:
+                                        # Try to detect which PV move is the actual mating move by
+                                        # applying the PV moves to a copy of the position and
+                                        # checking for checkmate. If found, suffix that move with '#'.
+                                        try:
+                                            board_cp = board.copy()
+                                            mate_index = None
+                                            for idx, mv in enumerate(pv_slice):
+                                                try:
+                                                    board_cp.push(mv)
+                                                except Exception:
+                                                    # if move cannot be applied, stop checking
+                                                    break
+                                                if board_cp.is_checkmate():
+                                                    mate_index = idx
+                                                    break
+                                            if mate_index is not None:
+                                                # append '#' to the mating move
+                                                move_ucis[mate_index] = move_ucis[mate_index] + '#'
+                                            else:
+                                                # fallback: if engine reported a mate but we couldn't
+                                                # detect it by simulation, mark the last PV move
+                                                try:
+                                                    move_ucis[-1] = move_ucis[-1] + '#'
+                                                except Exception:
+                                                    pass
+                                        except Exception:
+                                            # if anything goes wrong, don't prevent keeping the line
+                                            try:
+                                                move_ucis[-1] = move_ucis[-1] + '#'
+                                            except Exception:
+                                                pass
+
                                         moves_str = ' '.join(move_ucis)
-                                        # use 'sol' token to indicate solution moves
-                                        output_line += f" ; sol {moves_str};"
+                                        # use 'sol' token to indicate solution moves (EPD operand quoted)
+                                        output_line += f' ; sol "{moves_str}";'
                                         self.log_callback(f"Added solution moves ({len(move_ucis)}) for line {processed}: {moves_str}")
+                                    # always append theme with mate distance so downstream tools can pick it up
+                                    try:
+                                        output_line += f' ; theme "mate {mate_moves}";'
+                                    except Exception:
+                                        pass
 
                                 fout.write(output_line + '\n')
                                 kept += 1
@@ -592,12 +636,8 @@ class MainWindow(QMainWindow):
         if self.analyzer and not self.analyzer.is_alive():
             self.poll_timer.stop()
             self.analyzer = None
-# QEvent is imported from the selected Qt binding above
-class _CallableEvent(QEvent):
-    def __init__(self, callable_):
-        super().__init__(QEvent.Type(QEvent.registerEventType()))
-        self.callable = callable_
-        # called from background thread
+    def on_progress(self, pct, processed, total, kept):
+        # Post a callable event to update progress UI from the analyzer thread
         def upd():
             self.load_progress.setValue(pct)
             self.count_label.setText(f'Positions: {processed}/{total}')
@@ -625,13 +665,6 @@ class _CallableEvent(QEvent):
             e.callable()
             return True
         return super().event(e)
-
-
-from PySide6.QtCore import QEvent
-class _CallableEvent(QEvent):
-    def __init__(self, callable_):
-        super().__init__(QEvent.Type(QEvent.registerEventType()))
-        self.callable = callable_
 
 
 def main():
