@@ -28,7 +28,6 @@ import sys
 import os
 import time
 import threading
-from pathlib import Path
 from datetime import timedelta
 import json
 import re
@@ -103,15 +102,15 @@ open(DEBUG_LOG, "w").close()
 debug_log("=== New Run Started ===")
 
 
-
+# Engine default settings for search depth and threads
 DEFAULT_DEPTH = 20
 DEFAULT_THREADS = 1
 SETTINGS_FILE = 'epd_mate_settings.json'
 
-
+# Analyzer thread to analyze positions sequentially.
 class AnalyzerThread(threading.Thread):
     """Background worker to analyze positions sequentially."""
-    def __init__(self, input_path, output_path, engine_path, depth, threads, mate_limit, add_solution, progress_callback, eta_callback, log_callback, stop_event):
+    def __init__(self, input_path, output_path, engine_path, depth, threads, mate_limit, add_solution, output_json_path, fix_move_order, progress_callback, eta_callback, log_callback, stop_event):
         super().__init__()
         self.input_path = input_path
         self.output_path = output_path
@@ -121,6 +120,8 @@ class AnalyzerThread(threading.Thread):
         self.mate_limit = mate_limit
         # whether to add mate solution to output (UI checkbox)
         self.add_solution = bool(add_solution)
+        self.output_json_path = (output_json_path or '').strip()
+        self.fix_move_order = bool(fix_move_order)
         self.progress_callback = progress_callback
         self.eta_callback = eta_callback
         self.log_callback = log_callback
@@ -168,6 +169,7 @@ class AnalyzerThread(threading.Thread):
             processed = 0
             kept = 0
             start_time = time.time()
+            json_entries = [] if self.output_json_path else None
 
             with open(self.input_path, 'r', encoding='utf-8', errors='ignore') as fin, open(self.output_path, 'w', encoding='utf-8') as fout:
                 for line in fin:
@@ -257,60 +259,46 @@ class AnalyzerThread(threading.Thread):
                             # Keep if mate_moves within limit and positive
                             if 1 <= mate_moves <= self.mate_limit:
                                 output_line = line.rstrip('\n')
-                                if self.add_solution:
-                                    # Append the full mate solution from the engine PV, up to mate_moves
-                                    try:
-                                        pv = info.get('pv') or []
-                                    except Exception:
-                                        pv = []
-                                    # Use the full PV returned by the engine to ensure the mating move is included
-                                    try:
-                                        pv_slice = pv
-                                    except Exception:
-                                        pv_slice = pv
-                                    move_ucis = []
-                                    for mv in pv_slice:
-                                        try:
-                                            move_ucis.append(mv.uci())
-                                        except Exception:
-                                            move_ucis.append(str(mv))
-                                    if move_ucis:
-                                        # Try to detect which PV move is the actual mating move by
-                                        # applying the PV moves to a copy of the position and
-                                        # checking for checkmate. If found, suffix that move with '#'.
-                                        try:
-                                            board_cp = board.copy()
-                                            mate_index = None
-                                            for idx, mv in enumerate(pv_slice):
-                                                try:
-                                                    board_cp.push(mv)
-                                                except Exception:
-                                                    # if move cannot be applied, stop checking
-                                                    break
-                                                if board_cp.is_checkmate():
-                                                    mate_index = idx
-                                                    break
-                                            if mate_index is not None:
-                                                # append '#' to the mating move
-                                                move_ucis[mate_index] = move_ucis[mate_index] + '#'
-                                            else:
-                                                # fallback: if engine reported a mate but we couldn't
-                                                # detect it by simulation, mark the last PV move
-                                                try:
-                                                    move_ucis[-1] = move_ucis[-1] + '#'
-                                                except Exception:
-                                                    pass
-                                        except Exception:
-                                            # if anything goes wrong, don't prevent keeping the line
-                                            try:
-                                                move_ucis[-1] = move_ucis[-1] + '#'
-                                            except Exception:
-                                                pass
 
-                                        moves_str = ' '.join(move_ucis)
-                                        # use 'sol' token to indicate solution moves (EPD operand quoted)
-                                        output_line += f' ; sol "{moves_str}";'
-                                        self.log_callback(f"Added solution moves ({len(move_ucis)}) for line {processed}: {moves_str}")
+                                try:
+                                    pv_raw = info.get('pv') or []
+                                except Exception:
+                                    pv_raw = []
+
+                                pv_slice = []
+                                move_ucis = []
+                                mate_index = None
+
+                                if pv_raw:
+                                    board_cp = board.copy()
+                                    for idx, mv in enumerate(pv_raw):
+                                        pv_slice.append(mv)
+                                        try:
+                                            uci = mv.uci()
+                                        except Exception:
+                                            uci = str(mv)
+                                        move_ucis.append(uci)
+                                        try:
+                                            board_cp.push(mv)
+                                        except Exception:
+                                            break
+                                        if board_cp.is_checkmate():
+                                            mate_index = idx
+                                            break
+
+                                annotated_move_ucis = move_ucis.copy()
+                                if annotated_move_ucis:
+                                    mark_idx = mate_index if mate_index is not None else len(annotated_move_ucis) - 1
+                                    try:
+                                        annotated_move_ucis[mark_idx] = annotated_move_ucis[mark_idx] + '#'
+                                    except Exception:
+                                        pass
+
+                                if self.add_solution and annotated_move_ucis:
+                                    moves_str = ' '.join(annotated_move_ucis)
+                                    # use 'sol' token to indicate solution moves (EPD operand quoted)
+                                    output_line += f' ; sol "{moves_str}";'
+                                    self.log_callback(f"Added solution moves ({len(annotated_move_ucis)}) for line {processed}: {moves_str}")
                                     # always append theme with mate distance so downstream tools can pick it up
                                     try:
                                         output_line += f' ; theme "mate {mate_moves}";'
@@ -327,6 +315,31 @@ class AnalyzerThread(threading.Thread):
                                 except Exception:
                                     pass
 
+                                if self.output_json_path:
+                                    if json_entries is None:
+                                        json_entries = []
+
+                                    winning_color = board.turn if mate > 0 else (not board.turn)
+
+                                    solution_moves = annotated_move_ucis.copy()
+                                    json_board = board.copy()
+                                    if self.fix_move_order:
+                                        try:
+                                            json_board.turn = winning_color
+                                        except Exception:
+                                            pass
+                                    json_fen = json_board.fen()
+                                    if solution_moves:
+                                        json_entry = {
+                                            'fen': json_fen,
+                                            'solution': solution_moves,
+                                            'moves_to_mate': mate_moves,
+                                            'elo': 1200,
+                                            'solved': 0,
+                                            'failed': 0
+                                        }
+                                        json_entries.append(json_entry)
+
                     except Exception as e:
                         self.log_callback(f"Engine error on line {processed}: {e}")
                         # attempt to continue
@@ -337,6 +350,23 @@ class AnalyzerThread(threading.Thread):
                 engine.quit()
             except Exception:
                 pass
+
+            if self.output_json_path:
+                try:
+                    json_dir = os.path.dirname(self.output_json_path)
+                    if json_dir and not os.path.exists(json_dir):
+                        os.makedirs(json_dir, exist_ok=True)
+                    puzzles = json_entries or []
+                    payload = {
+                        'theme': 'Mates',
+                        'pattern': 'Mates',
+                        'puzzles': puzzles
+                    }
+                    with open(self.output_json_path, 'w', encoding='utf-8') as jf:
+                        json.dump(payload, jf, indent=2)
+                    self.log_callback(f"Saved JSON output with {len(puzzles)} entries to {self.output_json_path}")
+                except Exception as exc:
+                    self.log_callback(f"Failed to write JSON output: {exc}")
 
             total_elapsed = time.time() - start_time
             self.log_callback(f"Finished. Processed {processed}/{total_positions}, kept {kept}. Time: {timedelta(seconds=int(total_elapsed))}")
@@ -366,6 +396,7 @@ class MainWindow(QMainWindow):
         self.engine_path = ''
         self.input_path = ''
         self.output_path = ''
+        self.output_json_path = ''
         self.analyzer = None
         self.stop_event = threading.Event()
 
@@ -397,6 +428,10 @@ class MainWindow(QMainWindow):
         engine_layout.addWidget(self.engine_line)
         engine_layout.addWidget(btn_engine)
 
+        layout.addLayout(file_layout)
+        layout.addLayout(engine_layout)
+
+        layout.addWidget(QLabel('<b>EPD Output</b>'))
         output_layout = QHBoxLayout()
         self.output_line = QLineEdit()
         btn_output = QPushButton('Save As')
@@ -404,10 +439,31 @@ class MainWindow(QMainWindow):
         output_layout.addWidget(QLabel('Output EPD:'))
         output_layout.addWidget(self.output_line)
         output_layout.addWidget(btn_output)
-
-        layout.addLayout(file_layout)
-        layout.addLayout(engine_layout)
         layout.addLayout(output_layout)
+
+        epd_opts_layout = QHBoxLayout()
+        self.add_solution_checkbox = QCheckBox('Add mate solution')
+        self.add_solution_checkbox.setChecked(False)
+        epd_opts_layout.addWidget(self.add_solution_checkbox)
+        epd_opts_layout.addStretch()
+        layout.addLayout(epd_opts_layout)
+
+        layout.addWidget(QLabel('<b>JSON Output</b>'))
+        json_layout = QHBoxLayout()
+        self.output_json_line = QLineEdit()
+        btn_output_json = QPushButton('Save JSON As')
+        btn_output_json.clicked.connect(self.browse_output_json)
+        json_layout.addWidget(QLabel('Output JSON:'))
+        json_layout.addWidget(self.output_json_line)
+        json_layout.addWidget(btn_output_json)
+        layout.addLayout(json_layout)
+
+        json_opts_layout = QHBoxLayout()
+        self.fix_move_order_check = QCheckBox('Fix move order (winner moves first)')
+        self.fix_move_order_check.setChecked(True)
+        json_opts_layout.addWidget(self.fix_move_order_check)
+        json_opts_layout.addStretch()
+        layout.addLayout(json_opts_layout)
 
         # === Engine Settings ===
         layout.addWidget(QLabel("<b>Engine Settings</b>"))
@@ -436,13 +492,8 @@ class MainWindow(QMainWindow):
         self.mate_label = QLabel('Mate <= 6')
         self.mate_slider.valueChanged.connect(lambda v: self.mate_label.setText(f"Mate <= {v}"))
 
-        # Mate checkbox
-        self.add_solution_checkbox = QCheckBox('Add mate solution')
-        self.add_solution_checkbox.setChecked(False)
-
         mate_layout.addWidget(self.mate_label)
         mate_layout.addWidget(self.mate_slider)
-        mate_layout.addWidget(self.add_solution_checkbox)
         layout.addLayout(mate_layout)
 
 
@@ -489,6 +540,7 @@ class MainWindow(QMainWindow):
                 inp = data.get('last_input')
                 eng = data.get('last_engine')
                 out = data.get('last_output')
+                out_json = data.get('last_output_json')
                 if inp and os.path.exists(inp):
                     self.input_path = inp
                     self.input_line.setText(inp)
@@ -504,6 +556,9 @@ class MainWindow(QMainWindow):
                 if out:
                     self.output_path = out
                     self.output_line.setText(out)
+                if out_json:
+                    self.output_json_path = out_json
+                    self.output_json_line.setText(out_json)
         except Exception:
             # ignore settings errors
             pass
@@ -513,7 +568,8 @@ class MainWindow(QMainWindow):
             data = {
                 'last_input': self.input_line.text() or '',
                 'last_engine': self.engine_line.text() or '',
-                'last_output': self.output_line.text() or ''
+                'last_output': self.output_line.text() or '',
+                'last_output_json': self.output_json_line.text() or ''
             }
             with open(SETTINGS_FILE, 'w', encoding='utf-8') as sf:
                 json.dump(data, sf, indent=2)
@@ -534,6 +590,11 @@ class MainWindow(QMainWindow):
             base = os.path.splitext(path)[0]
             suggested = base + '_mates.epd'
             self.output_line.setText(suggested)
+            json_suggested = base + '_mates.json'
+            if not self.output_json_line.text().strip():
+                self.output_json_line.setText(json_suggested)
+            self.output_path = suggested
+            self.output_json_path = self.output_json_line.text().strip()
             # save setting
             try:
                 self.save_settings()
@@ -561,6 +622,18 @@ class MainWindow(QMainWindow):
                 self.save_settings()
             except Exception:
                 pass
+    
+    @Slot()
+    def browse_output_json(self):
+        path, _ = QFileDialog.getSaveFileName(self, 'Save JSON File', filter='JSON Files (*.json);;All Files (*)')
+        if path:
+            self.output_json_line.setText(path)
+            self.output_json_path = path
+            try:
+                self.save_settings()
+            except Exception:
+                pass
+
 
     def count_positions(self, path):
         # fast count lines without loading file fully
@@ -588,6 +661,7 @@ class MainWindow(QMainWindow):
         self.input_path = self.input_line.text()
         self.engine_path = self.engine_line.text()
         self.output_path = self.output_line.text()
+        self.output_json_path = self.output_json_line.text().strip()
 
         # disable UI controls
         self.analyze_btn.setEnabled(False)
@@ -609,6 +683,8 @@ class MainWindow(QMainWindow):
             threads=threads,
             mate_limit=mate_limit,
             add_solution=self.add_solution_checkbox.isChecked(),
+            output_json_path=self.output_json_path,
+            fix_move_order=self.fix_move_order_check.isChecked(),
             progress_callback=self.on_progress,
             eta_callback=self.on_eta,
             log_callback=self.append_log,
