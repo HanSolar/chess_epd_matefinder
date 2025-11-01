@@ -1,23 +1,25 @@
-# Make Donations to support the developer:
+# Make Donations to support the developer
 
-## Monero XMR
+## Dontaion can be made here to my Monero XMR wallet
+
 - 858KTnQzgVtcHmJodhmateWHg7Yxzivk4dxRAfofqdrbYzSnfeCqBrkD3H5ZtMG4YHCfqUG1wXuLi8yL9dw2GnEoNB1rsTX
 - Please Send only Monero (XMR) on Monero Network to this address above . Sending other coins may result in permanent loss.
 
 OR
 
 ## USD Coin (USDC)
+
 - 3jwtyXg4dVAeGe2mPocUJb9WS8tSamMSdkhdzgsGpr2w
 - Send only USD Coin (USDC) on Solana Network to this address. Sending other coins may result in permanent loss.
 
-# All the Code here is made with love and care for chess, enjoy
+- All the Code here is made with love and care for chess
 
+## EPD Mate Solver
 
-# EPD Mate Filter
-
-A small single-file Windows GUI app (PySide6 + python-chess) to filter EPD files for positions with forced mate within a user-configurable number of moves.
+A small single-file Windows GUI app (PySide6 + python-chess) to filter and find mates in EPD files for positions with forced mate within a user-configurable number of moves. The found postions can then be saved in a smaller EDP file, and the options to export JSON file format is also availble.
 
 ## Features
+
 - Load large EPD files (streamed, memory-friendly)
 - Select a UCI engine (Stockfish recommended)
 - Configure engine depth and threads
@@ -29,29 +31,34 @@ A small single-file Windows GUI app (PySide6 + python-chess) to filter EPD files
 - Option to fix the move order in the JSON output so the winning side is to move
 
 ## Requirements
+
 - Python 3.8+
 - `pip install python-chess PySide6`
 - A UCI engine binary (e.g., Stockfish) for Windows
+- Source of FEN position in EPD format
 
 ## Quick start
 
-1.  **Install dependencies:**
-    ```powershell
-    pip install python-chess PySide6
-    ```
+### Install dependencies
 
-2.  **Run the app:**
-    ```powershell
-    python epd_mate.py
-    ```
+```powershell
+pip install python-chess PySide6
+```
 
-3.  **In the app:**
-    - Click **"Open EPD"** and choose your `.epd` file. Default output paths for EPD and JSON files will be suggested automatically.
-    - Click **"Select Engine"** and pick your Stockfish executable.
-    - (Optional) Adjust the **Engine Settings** (Depth, Threads) and the **Mate Finder** slider.
-    - (Optional) Choose different output paths for the EPD and JSON files by clicking **"Save As"** or **"Save JSON As"**.
-    - (Optional) Toggle the checkboxes to control whether the mate solution is added to the EPD or if the move order is fixed in the JSON output.
-    - Click **"Analyze"** to start filtering. Progress and logs will appear in the UI.
+### Run the app
+
+```powershell
+python epd_mate.py
+```
+
+### In the app
+
+- Click **"Open EPD"** and choose your `.epd` file. Default output paths for EPD and JSON files will be suggested automatically.
+- Click **"Select Engine"** and pick your Stockfish executable.
+- (Optional) Adjust the **Engine Settings** (Depth, Threads) and the **Mate Finder** slider.
+- (Optional) Choose different output paths for the EPD and JSON files by clicking **"Save As"** or **"Save JSON As"**.
+- (Optional) Toggle the checkboxes to control whether the mate solution is added to the EPD or if the move order is fixed in the JSON output.
+- Click **"Analyze"** to start filtering. Progress and logs will appear in the UI.
 
 ## JSON Output Format
 
@@ -95,3 +102,4 @@ The app automatically saves your last-used file and engine paths in `epd_mate_se
 MIT
 
 - Please dont contact me for support, figure it out and love the new knowlege you gained.
+- Do what you want with this code, its a gift
