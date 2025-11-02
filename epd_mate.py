@@ -31,6 +31,7 @@ import threading
 from datetime import timedelta
 import json
 import re
+import signal
 
 # Qt bindings compatibility: prefer PySide6, fallback to PyQt6, PySide2 or PyQt5
 try:
@@ -744,7 +745,15 @@ class MainWindow(QMainWindow):
 
 
 def main():
+    # Allow Ctrl+C to kill the app
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
     app = QApplication(sys.argv)
+
+    # Timer to allow Python interpreter to run and process signals
+    timer = QTimer()
+    timer.start(500)
+    timer.timeout.connect(lambda: None)  # Let the interpreter run
+
     win = MainWindow()
     win.show()
     sys.exit(app.exec())
