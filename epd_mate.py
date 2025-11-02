@@ -38,16 +38,16 @@ try:
     from PySide6.QtWidgets import (
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
         QPushButton, QLabel, QProgressBar, QFileDialog, QSpinBox, QSlider,
-        QLineEdit, QTextEdit, QMessageBox, QCheckBox, QComboBox
+        QLineEdit, QTextEdit, QMessageBox, QCheckBox, QComboBox, QDialog
     )
     from PySide6.QtCore import Qt, QTimer, Slot, QEvent
     QT_BINDING = 'PySide6'
 except Exception:
     try:
         from PyQt6.QtWidgets import (
-            QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-            QPushButton, QLabel, QProgressBar, QFileDialog, QSpinBox, QSlider,
-            QLineEdit, QTextEdit, QMessageBox, QCheckBox, QComboBox
+        QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+        QPushButton, QLabel, QProgressBar, QFileDialog, QSpinBox, QSlider,
+        QLineEdit, QTextEdit, QMessageBox, QCheckBox, QComboBox, QDialog
         )
         from PyQt6.QtCore import Qt, QTimer, QEvent
         # PyQt6 uses different slot decorator name
@@ -58,16 +58,16 @@ except Exception:
             from PySide2.QtWidgets import (
                 QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                 QPushButton, QLabel, QProgressBar, QFileDialog, QSpinBox, QSlider,
-                QLineEdit, QTextEdit, QMessageBox, QCheckBox, QComboBox
+                QLineEdit, QTextEdit, QMessageBox, QCheckBox, QComboBox, QDialog
             )
             from PySide2.QtCore import Qt, QTimer, Slot, QEvent
             QT_BINDING = 'PySide2'
         except Exception:
             try:
                 from PyQt5.QtWidgets import (
-                    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-                    QPushButton, QLabel, QProgressBar, QFileDialog, QSpinBox, QSlider,
-                    QLineEdit, QTextEdit, QMessageBox, QCheckBox, QComboBox
+                QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+                QPushButton, QLabel, QProgressBar, QFileDialog, QSpinBox, QSlider,
+                QLineEdit, QTextEdit, QMessageBox, QCheckBox, QComboBox, QDialog
                 )
                 from PyQt5.QtCore import Qt, QTimer, QEvent
                 from PyQt5.QtCore import pyqtSlot as Slot
@@ -108,10 +108,38 @@ DEFAULT_DEPTH = 20
 DEFAULT_THREADS = 1
 SETTINGS_FILE = 'epd_mate_settings.json'
 
+
+def _read_settings_data():
+    try:
+        if os.path.exists(SETTINGS_FILE):
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as sf:
+                return json.load(sf)
+    except Exception:
+        pass
+    return {}
+
+
+def _write_settings_data(data):
+    try:
+        with open(SETTINGS_FILE, 'w', encoding='utf-8') as sf:
+            json.dump(data, sf, indent=2)
+    except Exception:
+        pass
+
+
+def update_settings(updates):
+    data = _read_settings_data()
+    try:
+        data.update(updates or {})
+    except Exception:
+        # fallback to rewriting updates only if data isn't a dict
+        data = updates or {}
+    _write_settings_data(data)
+
 # Analyzer thread to analyze positions sequentially.
 class AnalyzerThread(threading.Thread):
     """Background worker to analyze positions sequentially."""
-    def __init__(self, input_path, output_path, engine_path, depth, threads, mate_limit, add_solution, output_json_path, fix_move_order, progress_callback, eta_callback, log_callback, stop_event):
+    def __init__(self, input_path, output_path, engine_path, depth, threads, mate_limit, add_solution, progress_callback, eta_callback, log_callback, stop_event):
         super().__init__()
         self.input_path = input_path
         self.output_path = output_path
@@ -121,8 +149,6 @@ class AnalyzerThread(threading.Thread):
         self.mate_limit = mate_limit
         # whether to add mate solution to output (UI checkbox)
         self.add_solution = bool(add_solution)
-        self.output_json_path = (output_json_path or '').strip()
-        self.fix_move_order = bool(fix_move_order)
         self.progress_callback = progress_callback
         self.eta_callback = eta_callback
         self.log_callback = log_callback
@@ -170,8 +196,6 @@ class AnalyzerThread(threading.Thread):
             processed = 0
             kept = 0
             start_time = time.time()
-            json_entries = [] if self.output_json_path else None
-
             with open(self.input_path, 'r', encoding='utf-8', errors='ignore') as fin, open(self.output_path, 'w', encoding='utf-8') as fout:
                 for line in fin:
                     if self.stop_event.is_set():
@@ -316,31 +340,6 @@ class AnalyzerThread(threading.Thread):
                                 except Exception:
                                     pass
 
-                                if self.output_json_path:
-                                    if json_entries is None:
-                                        json_entries = []
-
-                                    winning_color = board.turn if mate > 0 else (not board.turn)
-
-                                    solution_moves = annotated_move_ucis.copy()
-                                    json_board = board.copy()
-                                    if self.fix_move_order:
-                                        try:
-                                            json_board.turn = winning_color
-                                        except Exception:
-                                            pass
-                                    json_fen = json_board.fen()
-                                    if solution_moves:
-                                        json_entry = {
-                                            'fen': json_fen,
-                                            'solution': solution_moves,
-                                            'moves_to_mate': mate_moves,
-                                            'elo': 1200,
-                                            'solved': 0,
-                                            'failed': 0
-                                        }
-                                        json_entries.append(json_entry)
-
                     except Exception as e:
                         self.log_callback(f"Engine error on line {processed}: {e}")
                         # attempt to continue
@@ -351,23 +350,6 @@ class AnalyzerThread(threading.Thread):
                 engine.quit()
             except Exception:
                 pass
-
-            if self.output_json_path:
-                try:
-                    json_dir = os.path.dirname(self.output_json_path)
-                    if json_dir and not os.path.exists(json_dir):
-                        os.makedirs(json_dir, exist_ok=True)
-                    puzzles = json_entries or []
-                    payload = {
-                        'theme': 'Mates',
-                        'pattern': 'Mates',
-                        'puzzles': puzzles
-                    }
-                    with open(self.output_json_path, 'w', encoding='utf-8') as jf:
-                        json.dump(payload, jf, indent=2)
-                    self.log_callback(f"Saved JSON output with {len(puzzles)} entries to {self.output_json_path}")
-                except Exception as exc:
-                    self.log_callback(f"Failed to write JSON output: {exc}")
 
             total_elapsed = time.time() - start_time
             self.log_callback(f"Finished. Processed {processed}/{total_positions}, kept {kept}. Time: {timedelta(seconds=int(total_elapsed))}")
@@ -388,6 +370,512 @@ class AnalyzerThread(threading.Thread):
                 pass
 
 
+_SOL_PATTERN = re.compile(r';\s*sol\s*"([^"]+)"', re.IGNORECASE)
+_THEME_PATTERN = re.compile(r';\s*theme\s*"([^"]+)"', re.IGNORECASE)
+_MATE_PATTERN = re.compile(r'mate\s*([+-]?\d+)', re.IGNORECASE)
+_MOVE_SUFFIX_PATTERN = re.compile(r'[+#?!]+$', re.IGNORECASE)
+
+
+def _extract_solution_moves(solution_text):
+    tokens = []
+    if not solution_text:
+        return tokens
+    for raw in solution_text.strip().split():
+        token = raw.strip()
+        if token:
+            tokens.append(token)
+    return tokens
+
+
+def _extract_mate_moves(theme_text):
+    if not theme_text:
+        return None
+    match = _MATE_PATTERN.search(theme_text)
+    if match:
+        try:
+            return abs(int(match.group(1)))
+        except Exception:
+            return None
+    return None
+
+
+def _sanitize_uci(move_text):
+    if not move_text:
+        return ''
+    return _MOVE_SUFFIX_PATTERN.sub('', move_text.strip())
+
+
+def _build_puzzle_entry(board, solution_moves, mate_moves, fix_move_order, line_number=None, log_callback=None):
+    """
+    Build one JSON puzzle entry.
+    If fix_move_order=True, ensure the winning side is to move.
+    If the first move belongs to the losing side, apply it to the board
+    so the FEN reflects that move having been played.
+    """
+    try:
+        board_sim = board.copy()
+        applied_moves = []
+        valid_tokens = []
+        
+        # Parse and validate all moves, skipping invalid ones
+        for token in solution_moves:
+            mv_uci = _sanitize_uci(token)
+            if not mv_uci:
+                if log_callback:
+                    log_callback(f"Line {line_number or '?'}: skipping empty move '{token}'")
+                continue
+            try:
+                mv = chess.Move.from_uci(mv_uci)
+            except Exception as exc:
+                if log_callback:
+                    log_callback(f"Line {line_number or '?'}: skipping invalid move '{token}' ({exc})")
+                continue
+            if mv not in board_sim.legal_moves:
+                if log_callback:
+                    log_callback(f"Line {line_number or '?'}: skipping illegal move '{token}' (not in legal moves)")
+                continue
+            board_sim.push(mv)
+            applied_moves.append(mv_uci)
+            valid_tokens.append(token)  # Keep original token format with suffixes
+
+        if not applied_moves:
+            if log_callback:
+                log_callback(f"Line {line_number or '?'}: no valid moves found in solution. Original moves: {solution_moves[:10]}")
+            # Fallback: if no moves validated, still try to create entry with original moves
+            # This handles cases where moves might be valid but validation failed
+            if not solution_moves:
+                return None
+            # Fallback: try to determine winning color from move count
+            # If mate_moves is odd, the side that starts wins; if even, the other side wins
+            # But simpler: assume the side that makes the last move (mate) is the winner
+            board_for_json = board.copy()
+            moves_for_json = solution_moves.copy()
+            
+            # Determine winning color: if mate_moves is provided, count moves
+            # The side that delivers mate is the winner
+            if mate_moves:
+                # Count which side makes the mate move
+                # If mate_moves is odd, starting side wins; if even, other side wins
+                starting_color = board.turn
+                if mate_moves % 2 == 1:
+                    winning_color = starting_color
+                else:
+                    winning_color = not starting_color
+            else:
+                # Default: assume starting side wins (common case)
+                winning_color = board.turn
+            
+            if fix_move_order:
+                first_move_color = board_for_json.turn
+                first_move_uci = _sanitize_uci(solution_moves[0]) if solution_moves else None
+                if first_move_uci:
+                    try:
+                        mv = chess.Move.from_uci(first_move_uci)
+                        if mv in board_for_json.legal_moves:
+                            board_for_json.push(mv)
+                            moves_for_json = solution_moves[1:]
+                            if log_callback:
+                                log_callback(f"Line {line_number or '?'}: fallback mode - baked first move {first_move_uci} into FEN.")
+                    except Exception:
+                        pass
+                board_for_json.turn = winning_color
+            
+            return {
+                "fen": board_for_json.fen(),
+                "solution": moves_for_json,
+                "moves_to_mate": mate_moves,
+                "elo": 1200,
+                "solved": 0,
+                "failed": 0
+            }
+
+        # Determine winner (side that delivered mate)
+        winning_color = not board_sim.turn if board_sim.is_checkmate() else board.turn
+
+        board_for_json = board.copy()
+        moves_for_json = valid_tokens.copy()  # Use valid tokens preserving original format
+
+        if fix_move_order:
+            # Identify who moves first in original FEN
+            first_move_color = board_for_json.turn
+            
+            # Get the first valid move that was actually applied
+            if valid_tokens and applied_moves:
+                first_move_uci = applied_moves[0]  # Use sanitized version for move object
+                first_token = valid_tokens[0]  # Use original token for output
+
+                # If the first move is not by the winning color, apply it to board
+                if first_move_color != winning_color:
+                    try:
+                        mv = chess.Move.from_uci(first_move_uci)
+                        if mv in board_for_json.legal_moves:
+                            board_for_json.push(mv)
+                            moves_for_json = valid_tokens[1:]  # Remove first move from solution
+                            if log_callback:
+                                log_callback(f"Line {line_number or '?'}: baked first move {first_token} into FEN.")
+                    except Exception as exc:
+                        if log_callback:
+                            log_callback(f"Line {line_number or '?'}: failed to bake first move ({exc})")
+
+            # Ensure correct side to move (winner)
+            board_for_json.turn = winning_color
+
+        return {
+            "fen": board_for_json.fen(),
+            "solution": moves_for_json,
+            "moves_to_mate": mate_moves,
+            "elo": 1200,
+            "solved": 0,
+            "failed": 0
+        }
+
+    except Exception as exc:
+        if log_callback:
+            log_callback(f"Line {line_number or '?'}: build failed ({exc})")
+        return None
+
+
+def _parse_puzzle_from_line(raw_line, line_number, fix_move_order, log_callback=None):
+    sol_match = _SOL_PATTERN.search(raw_line)
+    if not sol_match:
+        if log_callback and line_number <= 3:  # Log first few lines for debugging
+            log_callback(f"Line {line_number}: no 'sol' operand found. Line preview: {raw_line[:100]}")
+        return None
+
+    solution_moves = _extract_solution_moves(sol_match.group(1))
+    if not solution_moves:
+        if log_callback:
+            log_callback(f"Line {line_number}: 'sol' operand is empty.")
+        return None
+
+    base_segment = raw_line.split(';', 1)[0].strip()
+    fields = base_segment.split()
+    if len(fields) < 4:
+        if log_callback:
+            log_callback(f"Line {line_number}: not enough FEN fields to parse board.")
+        return None
+    fen_fields = fields[:6] if len(fields) >= 6 else fields
+    fen = ' '.join(fen_fields)
+
+    try:
+        board = chess.Board(fen)
+    except Exception as exc:
+        if log_callback:
+            log_callback(f"Line {line_number}: invalid FEN ({exc}).")
+        return None
+
+    mate_moves = None
+    theme_match = _THEME_PATTERN.search(raw_line)
+    if theme_match:
+        mate_moves = _extract_mate_moves(theme_match.group(1))
+    if mate_moves is None:
+        mate_moves = len(solution_moves)
+
+    entry = _build_puzzle_entry(board, solution_moves, mate_moves, fix_move_order, line_number=line_number, log_callback=log_callback)
+    if not entry and log_callback and line_number <= 3:
+        log_callback(f"Line {line_number}: _build_puzzle_entry returned None. Solution moves: {solution_moves[:5]}")
+    return entry
+
+
+def generate_json_from_epd(source_path, fix_move_order=False, progress_callback=None, log_callback=None, stop_event=None):
+    total_lines = 0
+    try:
+        with open(source_path, 'r', encoding='utf-8', errors='ignore') as counter:
+            for _ in counter:
+                total_lines += 1
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Source EPD not found: {source_path}")
+
+    if total_lines == 0:
+        raise ValueError('Source EPD file is empty.')
+
+    puzzles = []
+    processed = 0
+    kept = 0
+    cancelled = False
+
+    try:
+        with open(source_path, 'r', encoding='utf-8', errors='ignore') as fin:
+            for line_number, raw_line in enumerate(fin, 1):
+                if stop_event and stop_event.is_set():
+                    cancelled = True
+                    if log_callback:
+                        log_callback('Export cancelled by user request.')
+                    break
+
+                processed = line_number
+                stripped = raw_line.strip()
+                if stripped:
+                    entry = _parse_puzzle_from_line(stripped, line_number, fix_move_order, log_callback=log_callback)
+                    if entry:
+                        puzzles.append(entry)
+                        kept += 1
+                        if log_callback:
+                            log_callback(f"Line {line_number}: added puzzle (mate in {entry['moves_to_mate']}).")
+
+                if progress_callback:
+                    pct = int(line_number / total_lines * 100)
+                    progress_callback(pct, line_number, total_lines, kept)
+    finally:
+        if progress_callback:
+            progress_callback(100, processed, total_lines, kept)
+
+    payload = {
+        'theme': 'Mates',
+        'pattern': 'Mates',
+        'puzzles': puzzles
+    }
+
+    return payload, processed, kept, cancelled
+
+
+class JsonExportWorker(threading.Thread):
+    def __init__(self, source_path, dest_path, fix_move_order, progress_callback, log_callback, finished_callback, stop_event):
+        super().__init__()
+        self.source_path = source_path
+        self.dest_path = dest_path
+        self.fix_move_order = fix_move_order
+        self.progress_callback = progress_callback
+        self.log_callback = log_callback
+        self.finished_callback = finished_callback
+        self.stop_event = stop_event
+
+    def run(self):
+        try:
+            payload, processed, kept, cancelled = generate_json_from_epd(
+                self.source_path,
+                fix_move_order=self.fix_move_order,
+                progress_callback=self.progress_callback,
+                log_callback=self.log_callback,
+                stop_event=self.stop_event
+            )
+
+            if cancelled:
+                if self.finished_callback:
+                    self.finished_callback(False, 'Export cancelled.', kept)
+                return
+
+            dest_dir = os.path.dirname(self.dest_path)
+            if dest_dir and not os.path.exists(dest_dir):
+                os.makedirs(dest_dir, exist_ok=True)
+
+            with open(self.dest_path, 'w', encoding='utf-8') as jf:
+                json.dump(payload, jf, indent=2)
+
+            if self.log_callback:
+                self.log_callback(f"Saved JSON with {kept} puzzles to {self.dest_path} (processed {processed} lines).")
+            if self.finished_callback:
+                self.finished_callback(True, self.dest_path, kept)
+
+        except Exception as exc:
+            if self.log_callback:
+                self.log_callback(f'JSON export failed: {exc}')
+            if self.finished_callback:
+                self.finished_callback(False, str(exc), 0)
+
+
+class JsonExportDialog(QDialog):
+    def __init__(self, parent=None, default_source='', default_output=''):
+        super().__init__(parent)
+        self.setWindowTitle('Export JSON')
+        self.setMinimumSize(640, 420)
+
+        self.worker = None
+        self.stop_event = threading.Event()
+
+        self._build_ui()
+        self._load_settings(default_source, default_output)
+
+    def _build_ui(self):
+        layout = QVBoxLayout()
+
+        src_layout = QHBoxLayout()
+        src_layout.addWidget(QLabel('Source EPD:'))
+        self.source_line = QLineEdit()
+        btn_src = QPushButton('Browse...')
+        btn_src.clicked.connect(self._browse_source)
+        src_layout.addWidget(self.source_line)
+        src_layout.addWidget(btn_src)
+        layout.addLayout(src_layout)
+
+        dest_layout = QHBoxLayout()
+        dest_layout.addWidget(QLabel('Destination JSON:'))
+        self.dest_line = QLineEdit()
+        btn_dest = QPushButton('Save As...')
+        btn_dest.clicked.connect(self._browse_dest)
+        dest_layout.addWidget(self.dest_line)
+        dest_layout.addWidget(btn_dest)
+        layout.addLayout(dest_layout)
+
+        options_layout = QHBoxLayout()
+        self.fix_move_order_check = QCheckBox('Fix move order (winner to move)')
+        self.fix_move_order_check.setChecked(True)
+        options_layout.addWidget(self.fix_move_order_check)
+        options_layout.addStretch()
+        layout.addLayout(options_layout)
+
+        self.status_label = QLabel('Status: Idle')
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setValue(0)
+        layout.addWidget(self.status_label)
+        layout.addWidget(self.progress_bar)
+
+        layout.addWidget(QLabel('Log:'))
+        self.log = QTextEdit()
+        self.log.setReadOnly(True)
+        layout.addWidget(self.log)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        self.export_btn = QPushButton('Export')
+        self.export_btn.clicked.connect(self.start_export)
+        self.cancel_btn = QPushButton('Cancel')
+        self.cancel_btn.clicked.connect(self.cancel_export)
+        self.cancel_btn.setEnabled(False)
+        self.close_btn = QPushButton('Close')
+        self.close_btn.clicked.connect(self.close)
+        btn_layout.addWidget(self.export_btn)
+        btn_layout.addWidget(self.cancel_btn)
+        btn_layout.addWidget(self.close_btn)
+        layout.addLayout(btn_layout)
+
+        self.setLayout(layout)
+
+    def _load_settings(self, default_source='', default_output=''):
+        data = _read_settings_data()
+        source = data.get('json_source') or default_source
+        dest = data.get('json_output') or default_output
+        fix = data.get('json_fix_move_order')
+
+        self.source_line.setText(source or '')
+        self.dest_line.setText(dest or '')
+        if fix is None:
+            fix = True
+        self.fix_move_order_check.setChecked(bool(fix))
+
+    def _browse_source(self):
+        path, _ = QFileDialog.getOpenFileName(self, 'Select Source EPD', filter='EPD Files (*.epd);;All Files (*)')
+        if path:
+            self.source_line.setText(path)
+            self._suggest_dest_from_source()
+
+    def _browse_dest(self):
+        path, _ = QFileDialog.getSaveFileName(self, 'Save JSON File', filter='JSON Files (*.json);;All Files (*)')
+        if path:
+            if not path.lower().endswith('.json'):
+                path += '.json'
+            self.dest_line.setText(path)
+
+    def _suggest_dest_from_source(self):
+        src = self.source_line.text().strip()
+        if not src:
+            return
+        base, _ = os.path.splitext(src)
+        suggested = base + '.json'
+        if not self.dest_line.text().strip():
+            self.dest_line.setText(suggested)
+
+    def start_export(self):
+        if self.worker and self.worker.is_alive():
+            return
+
+        source_path = self.source_line.text().strip()
+        if not source_path or not os.path.exists(source_path):
+            QMessageBox.warning(self, 'Export JSON', 'Please select a valid source EPD file.')
+            return
+
+        dest_path = self.dest_line.text().strip()
+        if not dest_path:
+            QMessageBox.warning(self, 'Export JSON', 'Please choose where to save the JSON file.')
+            return
+
+        dest_dir = os.path.dirname(dest_path)
+        if dest_dir and not os.path.exists(dest_dir):
+            try:
+                os.makedirs(dest_dir, exist_ok=True)
+            except Exception as exc:
+                QMessageBox.warning(self, 'Export JSON', f'Unable to create destination folder: {exc}')
+                return
+
+        self.stop_event.clear()
+        self.progress_bar.setValue(0)
+        self.status_label.setText('Status: Exporting...')
+        self.log.clear()
+        self.export_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(True)
+
+        fix_move_order = self.fix_move_order_check.isChecked()
+        self._save_settings(source_path, dest_path, fix_move_order)
+
+        self.worker = JsonExportWorker(
+            source_path=source_path,
+            dest_path=dest_path,
+            fix_move_order=fix_move_order,
+            progress_callback=self.on_progress,
+            log_callback=self.append_log,
+            finished_callback=self.on_finished,
+            stop_event=self.stop_event
+        )
+        self.worker.start()
+
+    def cancel_export(self):
+        if self.worker and self.worker.is_alive():
+            self.stop_event.set()
+            self.status_label.setText('Status: Cancelling...')
+            self.cancel_btn.setEnabled(False)
+
+    def on_progress(self, pct, processed, total, kept):
+        def upd():
+            self.progress_bar.setValue(pct)
+            self.status_label.setText(f'Status: {processed}/{total} lines, {kept} puzzles')
+        QApplication.instance().postEvent(self, _CallableEvent(upd))
+
+    def on_finished(self, success, message, kept):
+        def upd():
+            self.worker = None
+            self.cancel_btn.setEnabled(False)
+            self.export_btn.setEnabled(True)
+            if success:
+                self.status_label.setText(f'Status: Completed ({kept} puzzles).')
+                QMessageBox.information(self, 'Export JSON', f'JSON file saved to:\n{message}')
+                parent = self.parent()
+                if parent and hasattr(parent, 'append_log'):
+                    parent.append_log(f'JSON export saved to {message}')
+            else:
+                current = 'Cancelled' if self.stop_event.is_set() else 'Failed'
+                self.status_label.setText(f'Status: {current}.')
+                if message:
+                    QMessageBox.warning(self, 'Export JSON', message)
+            self.stop_event.clear()
+        QApplication.instance().postEvent(self, _CallableEvent(upd))
+
+    def append_log(self, text):
+        def upd():
+            self.log.append(text)
+            self.log.verticalScrollBar().setValue(self.log.verticalScrollBar().maximum())
+        QApplication.instance().postEvent(self, _CallableEvent(upd))
+
+    def _save_settings(self, source, dest, fix_move_order):
+        update_settings({
+            'json_source': source or '',
+            'json_output': dest or '',
+            'json_fix_move_order': bool(fix_move_order)
+        })
+
+    def event(self, e):
+        if isinstance(e, _CallableEvent):
+            e.callable()
+            return True
+        return super().event(e)
+
+    def closeEvent(self, event):
+        if self.worker and self.worker.is_alive():
+            QMessageBox.warning(self, 'Export JSON', 'Please wait for the export to finish or cancel it before closing.')
+            event.ignore()
+            return
+        super().closeEvent(event)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -397,7 +885,6 @@ class MainWindow(QMainWindow):
         self.engine_path = ''
         self.input_path = ''
         self.output_path = ''
-        self.output_json_path = ''
         self.analyzer = None
         self.stop_event = threading.Event()
 
@@ -444,27 +931,17 @@ class MainWindow(QMainWindow):
 
         epd_opts_layout = QHBoxLayout()
         self.add_solution_checkbox = QCheckBox('Add mate solution')
-        self.add_solution_checkbox.setChecked(False)
+        self.add_solution_checkbox.setChecked(True)
         epd_opts_layout.addWidget(self.add_solution_checkbox)
         epd_opts_layout.addStretch()
         layout.addLayout(epd_opts_layout)
 
-        layout.addWidget(QLabel('<b>JSON Output</b>'))
-        json_layout = QHBoxLayout()
-        self.output_json_line = QLineEdit()
-        btn_output_json = QPushButton('Save JSON As')
-        btn_output_json.clicked.connect(self.browse_output_json)
-        json_layout.addWidget(QLabel('Output JSON:'))
-        json_layout.addWidget(self.output_json_line)
-        json_layout.addWidget(btn_output_json)
-        layout.addLayout(json_layout)
-
-        json_opts_layout = QHBoxLayout()
-        self.fix_move_order_check = QCheckBox('Fix move order (winner moves first)')
-        self.fix_move_order_check.setChecked(True)
-        json_opts_layout.addWidget(self.fix_move_order_check)
-        json_opts_layout.addStretch()
-        layout.addLayout(json_opts_layout)
+        export_layout = QHBoxLayout()
+        export_layout.addStretch()
+        self.export_json_btn = QPushButton('Export JSON...')
+        self.export_json_btn.clicked.connect(self.open_json_export_dialog)
+        export_layout.addWidget(self.export_json_btn)
+        layout.addLayout(export_layout)
 
         # === Engine Settings ===
         layout.addWidget(QLabel("<b>Engine Settings</b>"))
@@ -534,48 +1011,36 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(w)
 
     def load_settings(self):
+        data = _read_settings_data()
         try:
-            if os.path.exists(SETTINGS_FILE):
-                with open(SETTINGS_FILE, 'r', encoding='utf-8') as sf:
-                    data = json.load(sf)
-                inp = data.get('last_input')
-                eng = data.get('last_engine')
-                out = data.get('last_output')
-                out_json = data.get('last_output_json')
-                if inp and os.path.exists(inp):
-                    self.input_path = inp
-                    self.input_line.setText(inp)
-                    cnt = self.count_positions(inp)
-                    self.count_label.setText(f'Positions: {cnt}')
-                    # suggest output if none
-                    if not out:
-                        base = os.path.splitext(inp)[0]
-                        out = base + '_mates.epd'
-                if eng and os.path.exists(eng):
-                    self.engine_path = eng
-                    self.engine_line.setText(eng)
-                if out:
-                    self.output_path = out
-                    self.output_line.setText(out)
-                if out_json:
-                    self.output_json_path = out_json
-                    self.output_json_line.setText(out_json)
+            inp = data.get('last_input')
+            eng = data.get('last_engine')
+            out = data.get('last_output')
+            if inp and os.path.exists(inp):
+                self.input_path = inp
+                self.input_line.setText(inp)
+                cnt = self.count_positions(inp)
+                self.count_label.setText(f'Positions: {cnt}')
+                # suggest output if none
+                if not out:
+                    base = os.path.splitext(inp)[0]
+                    out = base + '_mates.epd'
+            if eng and os.path.exists(eng):
+                self.engine_path = eng
+                self.engine_line.setText(eng)
+            if out:
+                self.output_path = out
+                self.output_line.setText(out)
         except Exception:
             # ignore settings errors
             pass
 
     def save_settings(self):
-        try:
-            data = {
-                'last_input': self.input_line.text() or '',
-                'last_engine': self.engine_line.text() or '',
-                'last_output': self.output_line.text() or '',
-                'last_output_json': self.output_json_line.text() or ''
-            }
-            with open(SETTINGS_FILE, 'w', encoding='utf-8') as sf:
-                json.dump(data, sf, indent=2)
-        except Exception:
-            pass
+        update_settings({
+            'last_input': self.input_line.text() or '',
+            'last_engine': self.engine_line.text() or '',
+            'last_output': self.output_line.text() or ''
+        })
 
     @Slot()
     def browse_input(self):
@@ -591,11 +1056,7 @@ class MainWindow(QMainWindow):
             base = os.path.splitext(path)[0]
             suggested = base + '_mates.epd'
             self.output_line.setText(suggested)
-            json_suggested = base + '_mates.json'
-            if not self.output_json_line.text().strip():
-                self.output_json_line.setText(json_suggested)
             self.output_path = suggested
-            self.output_json_path = self.output_json_line.text().strip()
             # save setting
             try:
                 self.save_settings()
@@ -623,19 +1084,23 @@ class MainWindow(QMainWindow):
                 self.save_settings()
             except Exception:
                 pass
-    
+
     @Slot()
-    def browse_output_json(self):
-        path, _ = QFileDialog.getSaveFileName(self, 'Save JSON File', filter='JSON Files (*.json);;All Files (*)')
-        if path:
-            self.output_json_line.setText(path)
-            self.output_json_path = path
-            try:
-                self.save_settings()
-            except Exception:
-                pass
+    def open_json_export_dialog(self):
+        default_source = ''
+        if self.output_path and os.path.exists(self.output_path):
+            default_source = self.output_path
+        elif self.input_path and os.path.exists(self.input_path):
+            default_source = self.input_path
 
+        default_output = ''
+        if default_source:
+            base, _ = os.path.splitext(default_source)
+            default_output = base + '.json'
 
+        dialog = JsonExportDialog(self, default_source=default_source, default_output=default_output)
+        dialog.exec()
+    
     def count_positions(self, path):
         # fast count lines without loading file fully
         try:
@@ -662,7 +1127,6 @@ class MainWindow(QMainWindow):
         self.input_path = self.input_line.text()
         self.engine_path = self.engine_line.text()
         self.output_path = self.output_line.text()
-        self.output_json_path = self.output_json_line.text().strip()
 
         # disable UI controls
         self.analyze_btn.setEnabled(False)
@@ -684,8 +1148,6 @@ class MainWindow(QMainWindow):
             threads=threads,
             mate_limit=mate_limit,
             add_solution=self.add_solution_checkbox.isChecked(),
-            output_json_path=self.output_json_path,
-            fix_move_order=self.fix_move_order_check.isChecked(),
             progress_callback=self.on_progress,
             eta_callback=self.on_eta,
             log_callback=self.append_log,
