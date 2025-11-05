@@ -103,3 +103,4 @@ MIT
 
 - Please dont contact me for support, figure it out and love the new knowlege you gained.
 - Do what you want with this code, its a gift
+- Donate if you care for my well being thanks.
